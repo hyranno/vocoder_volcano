@@ -1,0 +1,93 @@
+#version 450
+
+const int WORKGROUP_SIZE = 1024;
+layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+const int MAX_WAVE_LENGTH = WORKGROUP_SIZE;
+const int INPUT_BUFFER_LENGTH = 1024;
+
+
+/* prototypes */
+
+vec2 samplewiseFourier(
+  const int t, const float value, const float expire,
+  inout ivec2 state
+);
+
+
+
+/* kernel */
+
+layout(set = 0, binding = 0) buffer Time {
+  int t;
+} time_buffer;
+layout(set = 0, binding = 1) buffer InitialState {
+  ivec2 data[WORKGROUP_SIZE];
+} state_buffer;
+layout(set = 0, binding = 2) buffer Input {
+  float data[];
+} input_buffer;
+layout(set = 0, binding = 3) buffer History {
+  float data[MAX_WAVE_LENGTH];
+} history_buffer;
+layout(set = 0, binding = 4) buffer Dest {
+  vec2[WORKGROUP_SIZE] data[];
+} dest_buffer;
+
+layout(set = 1, binding = 0) buffer PitchShift {
+  float shift_ratio;
+  float delay;
+  float mix_span;
+} pitch_shift_buffer;
+
+
+shared float[INPUT_BUFFER_LENGTH] inputs;
+shared float[INPUT_BUFFER_LENGTH] expires;
+shared float[MAX_WAVE_LENGTH] prev_history;
+void main() {
+  const uint id = gl_LocalInvocationIndex;
+  const uint input_length = input_buffer.data.length();
+  ivec2 samplewiseFourierState = state_buffer.data[id];
+  prev_history[id] = history_buffer.data[id];
+  if (id < input_length) {
+    inputs[id] = input_buffer.data[id];
+  }
+  barrier();
+  if (id < input_length) {
+    expires[id] = prev_history[(history_buffer.data.length()-input_length) + id];
+    history_buffer.data[id] = inputs[id];
+  } else {
+    history_buffer.data[id] = prev_history[id + input_length];
+  }
+  const int t = time_buffer.t;
+  barrier();
+
+  for (int i=0; i < input_buffer.data.length(); i++) {
+    dest_buffer.data[i][id] = samplewiseFourier(t+i, inputs[i], expires[i], samplewiseFourierState);
+    barrier();
+  }
+  state_buffer.data[id] = samplewiseFourierState;
+  int period = int( float(MAX_WAVE_LENGTH) * pitch_shift_buffer.delay / abs(pitch_shift_buffer.shift_ratio - 1.0) );
+  time_buffer.t = (t + input_buffer.data.length()) % period;
+}
+
+
+
+/* functions */
+
+vec2 samplewiseFourier(
+  const int t, const float value, const float expire,
+  inout ivec2 state  //fixed point float for less precision error
+) {
+  const uint id = gl_LocalInvocationIndex;
+  const float freq = float(id) / float(MAX_WAVE_LENGTH);
+  const float phase = float(t % MAX_WAVE_LENGTH) * 2.0*radians(180.0) * freq;
+  const float fixed_scale = float(1 << 16);
+  state = (
+      state
+      + ivec2(fixed_scale * value * vec2(cos(phase), sin(phase)))
+      - ivec2(fixed_scale * expire * vec2(cos(phase), sin(phase)))
+    )
+  ;
+  return vec2(state) / fixed_scale;
+}

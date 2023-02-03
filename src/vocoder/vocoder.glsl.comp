@@ -1,0 +1,87 @@
+#version 450
+
+const int WORKGROUP_SIZE = 1024;
+layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+const int MAX_WAVE_LENGTH = WORKGROUP_SIZE;
+
+/* prototypes */
+float sum(float elem, const uint len);
+float inverseSamplewiseFourier (const int t, const vec2 state_elem);
+
+/* kernel */
+
+layout(set = 0, binding = 0) buffer Time {
+  int t;
+} time_buffer;
+layout(set = 0, binding = 1) buffer States {
+  vec2[MAX_WAVE_LENGTH] data[];
+} state_buffer;
+layout(set = 0, binding = 2) buffer Dest {
+  float data[];
+} dest_buffer;
+
+layout(set = 1, binding = 0) buffer PitchShift {
+  float shift_ratio;
+  float delay;     //333.0
+  float mix_span;  // 0.06
+} pitch_shift_buffer;
+
+void main() {
+  const uint gid = gl_WorkGroupID.x;
+  const uint id = gl_LocalInvocationIndex;
+  const int t = time_buffer.t + int(gid) - int(gl_NumWorkGroups.x);
+  vec2 fourierStateElem = state_buffer.data[gid][id];
+  float result = inverseSamplewiseFourier(t, fourierStateElem);
+  if (id == 0) {
+    dest_buffer.data[gid] = result;
+  }
+}
+
+
+/* functions */
+
+shared float[WORKGROUP_SIZE] buffer_sum;
+float sum(float elem, const uint len) {
+  const uint id = gl_LocalInvocationIndex;
+  uint k = uint(log2(len));
+  buffer_sum[id] = elem;
+  for (uint i=1; i<=k; i++) {
+    barrier();
+    uint stride = len >> i;
+    buffer_sum[id] += mix(buffer_sum[min(id+stride, len-1)], 0.0, step(stride, id));
+  }
+  barrier();
+  return buffer_sum[0];
+}
+
+
+
+
+float inverseSamplewiseFourier_window(float dt, float delay) {
+  const float mix_span = pitch_shift_buffer.mix_span;
+  const float ratio = dt / delay;
+  return smoothstep(0.5-mix_span, 0.5+mix_span, ratio);
+}
+
+float inverseSamplewiseFourier_sub(float t, vec2 state_elem, float freq) {
+  const float phase = float(t) * 2.0*radians(180.0) * freq;
+  return dot(vec2(state_elem), vec2(cos(phase), sin(phase)));
+}
+
+float inverseSamplewiseFourier (
+  const int t,
+  const vec2 state_elem
+) {
+  const uint id = gl_LocalInvocationIndex;
+  const float shift_ratio = pitch_shift_buffer.shift_ratio;
+  const float delay = clamp(pitch_shift_buffer.delay, 0.0, float(MAX_WAVE_LENGTH)-1.0) + 1.0;
+  const float signed_freq = mod(float(id) / float(WORKGROUP_SIZE) + 0.5, 1.0) - 0.5;
+  const float nyquist_valid =  mix(0.0, 1.0, abs(shift_ratio * signed_freq) < 0.5);
+  const float dt = mod(float(t)*(shift_ratio-1.0), delay);
+  const float result_elem0 = inverseSamplewiseFourier_sub(t + dt -1*delay, state_elem, signed_freq);
+  const float result_elem1 = inverseSamplewiseFourier_sub(t + dt -2*delay, state_elem, signed_freq);
+  const float mix_ratio = inverseSamplewiseFourier_window(dt, delay);
+  const float result_elem = mix(result_elem0, result_elem1, mix_ratio) * nyquist_valid;
+  return sum(result_elem, WORKGROUP_SIZE) / float(WORKGROUP_SIZE);
+}
