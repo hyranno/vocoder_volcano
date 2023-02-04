@@ -50,8 +50,8 @@ impl Default for VocoderSettings {
     fn default() -> Self {
         Self {
             pitch_shift_ratio: 1.0,
-            delay: 319.0,
-            mix_span: 0.1,
+            delay: 341.0,
+            mix_span: 0.9,
         }
     }
 }
