@@ -12,6 +12,7 @@ vulkano = "0.32"
 vulkano-shaders = "0.32"
 vulkano-util = "0.32"
 bytemuck = "1.8.0"
+lv2 = "0.6.0"
 
 [dev-dependencies]
 rodio = "0.16"
