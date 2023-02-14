@@ -6,8 +6,10 @@ layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 const int MAX_WAVE_LENGTH = WORKGROUP_SIZE;
 
 /* prototypes */
+float polynomial(float[8] coef, float x);
 float sum(float elem, const uint len);
 float inverseSamplewiseFourier (const int t, const vec2 state_elem);
+vec2 equalize(const vec2 elem);
 
 /* kernel */
 
@@ -23,15 +25,20 @@ layout(set = 0, binding = 2) buffer Dest {
 
 layout(set = 1, binding = 0) buffer PitchShift {
   float shift_ratio;
-  float delay;     //333.0
-  float mix_span;  // 0.06
+  float delay;
+  float mix_span;
 } pitch_shift_buffer;
+layout(set = 2, binding = 0) buffer Equalizer {
+  float[8] polynomial;
+} equalizer_buffer;
 
 void main() {
   const uint gid = gl_WorkGroupID.x;
   const uint id = gl_LocalInvocationIndex;
   const int t = time_buffer.t + int(gid) - int(gl_NumWorkGroups.x);
   vec2 fourierStateElem = state_buffer.data[gid][id];
+  float tmp = equalizer_buffer.polynomial[0];
+  fourierStateElem = equalize(fourierStateElem);
   float result = inverseSamplewiseFourier(t, fourierStateElem);
   if (id == 0) {
     dest_buffer.data[gid] = result;
@@ -40,6 +47,15 @@ void main() {
 
 
 /* functions */
+
+float polynomial(float[8] coef, float x) {
+  const int degree = coef.length() - 1;
+  float res = 0.0;
+  for (int i = 0; i <= degree; i++) {
+    res = coef[degree-i] + x * res;
+  }
+  return res;
+}
 
 shared float[WORKGROUP_SIZE] buffer_sum;
 float sum(float elem, const uint len) {
@@ -84,4 +100,12 @@ float inverseSamplewiseFourier (
   const float mix_ratio = inverseSamplewiseFourier_window(dt, delay);
   const float result_elem = mix(result_elem0, result_elem1, mix_ratio) * nyquist_valid;
   return sum(result_elem, WORKGROUP_SIZE) / float(WORKGROUP_SIZE);
+}
+
+vec2 equalize(const vec2 elem) {
+  const uint id = gl_LocalInvocationIndex;
+  const float signed_freq = mod(float(id) / float(WORKGROUP_SIZE) + 0.5, 1.0) - 0.5;
+  float[8] coef = equalizer_buffer.polynomial;
+  float amp = polynomial(coef, abs(signed_freq) * 2.0);
+  return elem * amp;
 }

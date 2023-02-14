@@ -6,13 +6,12 @@ use samplewise_fourier::SamplewiseFourierDescriptorSets;
 mod pitch_shift;
 use pitch_shift::PitchShiftDescriptorSets;
 
+mod equalizer;
+use equalizer::EqualizerDescriptorSets;
+
 /*
 mod formant_warp;
 use formant_warp::FormantWarpDescriptorSets;
- */
-/*
-mod equalizer;
-use equalizer::EqualizerDescriptorSets;
  */
 
 
@@ -45,6 +44,7 @@ pub struct VocoderSettings {
     pub pitch_shift_ratio: f32,
     pub delay: f32,
     pub mix_span: f32,
+    pub equalizer: [f32; 8],
 }
 impl Default for VocoderSettings {
     fn default() -> Self {
@@ -52,6 +52,7 @@ impl Default for VocoderSettings {
             pitch_shift_ratio: 1.0,
             delay: 341.0,
             mix_span: 0.9,
+            equalizer: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -111,6 +112,11 @@ impl Vocoder {
             &memory_allocator, &descriptor_set_allocator, &mut command_buffer_builder,
             set_layouts_ft.get(1).unwrap().clone(), set_layouts_vocoder.get(1).unwrap().clone(),
         );
+        let equalizer_descriptor_sets = EqualizerDescriptorSets::new(
+            settings.equalizer.clone(),
+            &memory_allocator, &descriptor_set_allocator, &mut command_buffer_builder,
+            set_layouts_vocoder.get(2).unwrap().clone(),
+        );
 
         sync::now(device.clone())
             .then_execute(queue.clone(), command_buffer_builder.build().unwrap()).unwrap()
@@ -125,6 +131,7 @@ impl Vocoder {
         let descriptor_sets_vocoder = vec![
             samplewise_fourier_descriptor_sets.descriptor_set_ift.clone(),
             pitch_shift_descriptor_sets.descriptor_set_ift.clone(),
+            equalizer_descriptor_sets.descriptor_set.clone(),
         ];
 
         Vocoder {
@@ -175,8 +182,8 @@ impl Vocoder {
             &self.command_buffer_allocator,
             self.queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
+        ).unwrap();
+
         builder
             .bind_pipeline_compute(self.pipeline_ft.clone())
             .bind_descriptor_sets(
@@ -196,12 +203,10 @@ impl Vocoder {
             .dispatch([1024, 1, 1]).expect("failed to dispatch");
         let command_buffer = builder.build().unwrap();
     
-    
+
         let future = sync::now(self.vulkan_device.clone())
-            .then_execute(self.queue.clone(), command_buffer)
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap();
+            .then_execute(self.queue.clone(), command_buffer).unwrap()
+            .then_signal_fence_and_flush().unwrap();
     
         future.wait(None).unwrap();
     }
