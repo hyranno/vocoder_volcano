@@ -9,10 +9,8 @@ use pitch_shift::PitchShiftDescriptorSets;
 mod equalizer;
 use equalizer::EqualizerDescriptorSets;
 
-/*
-mod formant_warp;
-use formant_warp::FormantWarpDescriptorSets;
- */
+mod envelope_warp;
+use envelope_warp::EnvelopeWarpDescriptorSets;
 
 
 use std::{
@@ -45,6 +43,7 @@ pub struct VocoderSettings {
     pub delay: f32,
     pub mix_span: f32,
     pub equalizer: [f32; 8],
+    pub envelope_warp: [f32; 8],
 }
 impl Default for VocoderSettings {
     fn default() -> Self {
@@ -53,6 +52,7 @@ impl Default for VocoderSettings {
             delay: 341.0,
             mix_span: 0.9,
             equalizer: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            envelope_warp: [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -117,6 +117,11 @@ impl Vocoder {
             &memory_allocator, &descriptor_set_allocator, &mut command_buffer_builder,
             set_layouts_vocoder.get(2).unwrap().clone(),
         );
+        let envelope_warp_descriptor_sets = EnvelopeWarpDescriptorSets::new(
+            settings.envelope_warp.clone(),
+            &memory_allocator, &descriptor_set_allocator, &mut command_buffer_builder,
+            set_layouts_vocoder.get(3).unwrap().clone(),
+        );
 
         sync::now(device.clone())
             .then_execute(queue.clone(), command_buffer_builder.build().unwrap()).unwrap()
@@ -132,6 +137,7 @@ impl Vocoder {
             samplewise_fourier_descriptor_sets.descriptor_set_ift.clone(),
             pitch_shift_descriptor_sets.descriptor_set_ift.clone(),
             equalizer_descriptor_sets.descriptor_set.clone(),
+            envelope_warp_descriptor_sets.descriptor_set.clone(),
         ];
 
         Vocoder {

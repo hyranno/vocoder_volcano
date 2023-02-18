@@ -10,6 +10,7 @@ float polynomial(float[8] coef, float x);
 float sum(float elem, const uint len);
 float inverseSamplewiseFourier (const int t, const vec2 state_elem);
 vec2 equalize(const vec2 elem);
+vec2 envelope_warp(const vec2 elem);
 
 /* kernel */
 
@@ -31,6 +32,9 @@ layout(set = 1, binding = 0) buffer PitchShift {
 layout(set = 2, binding = 0) buffer Equalizer {
   float[8] polynomial;
 } equalizer_buffer;
+layout(set = 3, binding = 0) buffer EnvelopeWarp {
+  float[8] polynomial;
+} envelope_warp_buffer;
 
 void main() {
   const uint gid = gl_WorkGroupID.x;
@@ -39,6 +43,7 @@ void main() {
   vec2 fourierStateElem = state_buffer.data[gid][id];
   float tmp = equalizer_buffer.polynomial[0];
   fourierStateElem = equalize(fourierStateElem);
+  fourierStateElem = envelope_warp(fourierStateElem);
   float result = inverseSamplewiseFourier(t, fourierStateElem);
   if (id == 0) {
     dest_buffer.data[gid] = result;
@@ -109,3 +114,38 @@ vec2 equalize(const vec2 elem) {
   float amp = polynomial(coef, abs(signed_freq) * 2.0);
   return elem * amp;
 }
+
+shared float[WORKGROUP_SIZE] buffer_envelope_warp;
+vec2 envelope_warp(const vec2 elem) {
+  const uint id = gl_LocalInvocationIndex;
+  buffer_envelope_warp[id] = length(elem);
+  barrier();
+  for (uint i=0; i<3; i++) {  // local mean, substitute for envelope
+    const uint stride = 1 << i;
+    const uint prev = uint(clamp(0.0, float(WORKGROUP_SIZE-1), float(id-stride)));
+    const uint next = uint(clamp(0.0, float(WORKGROUP_SIZE-1), float(id+stride)));
+    buffer_envelope_warp[id] = (
+      2.0 * buffer_envelope_warp[id] +
+      buffer_envelope_warp[prev] + buffer_envelope_warp[next]
+    ) / 4.0;
+    barrier();
+  }
+  const float amp_src = max(buffer_envelope_warp[id], 1.0/float(1<<7));
+  const float signed_freq = mod(float(id) / float(WORKGROUP_SIZE) + 0.5, 1.0) - 0.5;
+  float[8] coef = envelope_warp_buffer.polynomial;
+  const float warped_freq = sign(signed_freq) * polynomial(coef, abs(signed_freq) * 2.0) / 2.0;
+  const float clamped_freq = clamp(warped_freq, -0.5, 0.5);
+  const float index = mod(clamped_freq, 1.0) * float(WORKGROUP_SIZE);
+  const float clamped_index = clamp(index, 0.0, float(WORKGROUP_SIZE-1));
+  const float amp_dest = mix(
+    buffer_envelope_warp[uint(floor(clamped_index))],
+    buffer_envelope_warp[uint(ceil(clamped_index))],
+    fract(clamped_index)
+  );
+  return amp_dest / amp_src * elem;
+}
+
+/* TODO:
+float signed_freq(index)
+float freq_to_index(freq)
+*/
